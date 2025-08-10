@@ -54,7 +54,10 @@ class AcousticSensorDashboard:
             level_data = []
             pressure_data = []
             
-            for i in range(duration_minutes * 60 // update_interval):
+            # Ensure integer values for range function
+            total_seconds = int(duration_minutes * 60)
+            interval_seconds = max(1, int(update_interval))  # Ensure minimum interval of 1 second
+            for i in range(0, total_seconds, interval_seconds):
                 current_time = start_time + timedelta(seconds=i * update_interval)
                 time_points.append(current_time)
                 
@@ -114,8 +117,10 @@ class AcousticSensorDashboard:
 
     def _simulation_loop(self, duration_minutes, update_interval):
         """Main simulation loop"""
+        # Ensure update_interval is a positive number
+        interval = max(0.1, float(update_interval))
         while self.simulation_running and self.current_time_index < len(self.simulation_data['time_points']):
-            time.sleep(update_interval)
+            time.sleep(interval)
             self.current_time_index += 1
 
     def get_simulation_status(self):
@@ -126,7 +131,11 @@ class AcousticSensorDashboard:
         elapsed = datetime.now() - self.simulation_start_time
         progress = (self.current_time_index / len(self.simulation_data['time_points'])) * 100 if self.simulation_data else 0
         
-        return f"🔄 LIVE - Elapsed: {elapsed.strftime('%M:%S')} | Progress: {progress:.1f}% | Data Points: {self.current_time_index + 1}"
+        # Convert timedelta to minutes and seconds for display
+        elapsed_minutes = int(elapsed.total_seconds() // 60)
+        elapsed_seconds = int(elapsed.total_seconds() % 60)
+        
+        return f"🔄 LIVE - Elapsed: {elapsed_minutes:02d}:{elapsed_seconds:02d} | Progress: {progress:.1f}% | Data Points: {self.current_time_index + 1}"
 
     def create_real_time_pressure_dashboard(self):
         """Create real-time pressure monitoring dashboard"""
