@@ -1,0 +1,36 @@
+[project]
+name = "acoustic-sensor-dashboard"
+version = "1.0.0"
+description = "POC Dashboard for Revolutionary Acoustic Sensor Technology"
+authors = [
+    {name = "Acoustic Sensor Development Team"}
+]
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = [
+    "gradio>=4.0.0",
+    "pandas>=2.0.0",
+    "numpy>=1.24.0",
+    "plotly>=5.15.0",
+    "matplotlib>=3.7.0",
+    "seaborn>=0.12.0",
+    "scikit-learn>=1.3.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "black>=23.0.0",
+    "flake8>=6.0.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+dev-dependencies = [
+    "pytest>=7.0.0",
+    "black>=23.0.0",
+    "flake8>=6.0.0",
+]
