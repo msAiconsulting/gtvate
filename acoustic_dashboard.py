@@ -4,450 +4,755 @@ import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
-import matplotlib.pyplot as plt
-import seaborn as sns
+import time
+import threading
 from datetime import datetime, timedelta
-import warnings
-warnings.filterwarnings('ignore')
-
-# Set style for better visualizations
-plt.style.use('seaborn-v0_8')
-sns.set_palette("husl")
+import random
 
 class AcousticSensorDashboard:
     def __init__(self):
-        self.pressure_data = None
-        self.acoustic_data = None
         self.load_data()
+        self.simulation_running = False
+        self.simulation_thread = None
+        self.current_time_index = 0
+        self.simulation_data = []
+        self.simulation_start_time = None
         
     def load_data(self):
-        """Load and preprocess the sensor data"""
+        """Load sensor data from CSV files"""
         try:
             # Load pressure data
             self.pressure_data = pd.read_csv('data/pressures.csv')
             self.pressure_data['Receipt_time'] = pd.to_datetime(self.pressure_data['Receipt_time'])
             
-            # Load acoustic data (sample first 1000 rows for performance)
+            # Load acoustic data (first 1000 rows for performance)
             self.acoustic_data = pd.read_csv('data/AC01-1400057.csv', nrows=1000)
             self.acoustic_data['receipt_time'] = pd.to_datetime(self.acoustic_data['receipt_time'])
             
-            # Extract frequency columns
+            # Get frequency columns
             self.freq_columns = [col for col in self.acoustic_data.columns if col.startswith('f')]
             
+            print(f"✅ Data loaded: {len(self.pressure_data)} pressure records, {len(self.acoustic_data)} acoustic records")
+            
         except Exception as e:
-            print(f"Error loading data: {e}")
-    
-    def create_pressure_dashboard(self):
-        """Create pressure sensor visualization"""
-        if self.pressure_data is None:
-            return "No pressure data available"
+            print(f"❌ Error loading data: {e}")
+            self.pressure_data = None
+            self.acoustic_data = None
+            self.freq_columns = []
+
+    def generate_simulation_data(self, duration_minutes=10, update_interval=1):
+        """Generate realistic simulation data based on actual sensor patterns"""
+        if not self.acoustic_data.empty:
+            # Use actual data patterns as base
+            base_freq_data = self.acoustic_data[self.freq_columns].iloc[0].values
+            base_levels = self.acoustic_data[['level_contact', 'level_ambient']].iloc[0].values
+            
+            # Generate time points
+            start_time = datetime.now()
+            time_points = []
+            freq_data = []
+            level_data = []
+            pressure_data = []
+            
+            for i in range(duration_minutes * 60 // update_interval):
+                current_time = start_time + timedelta(seconds=i * update_interval)
+                time_points.append(current_time)
+                
+                # Add realistic variations to frequency data
+                noise = np.random.normal(0, 0.5, len(base_freq_data))
+                trend = np.sin(2 * np.pi * i / (60 * 10)) * 2  # 10-minute cycle
+                new_freq = base_freq_data + noise + trend
+                freq_data.append(new_freq)
+                
+                # Add variations to level data
+                level_noise = np.random.normal(0, 10, 2)
+                level_trend = np.sin(2 * np.pi * i / (60 * 5)) * 20  # 5-minute cycle
+                new_levels = base_levels + level_noise + level_trend
+                level_data.append(new_levels)
+                
+                # Generate pressure variations
+                base_pressure = 1.0
+                pressure_noise = np.random.normal(0, 0.1)
+                pressure_trend = np.sin(2 * np.pi * i / (60 * 3)) * 0.3  # 3-minute cycle
+                new_pressure = base_pressure + pressure_noise + pressure_trend
+                pressure_data.append([new_pressure, new_pressure * 0.95, 0.26, 0.08])
+            
+            return {
+                'time_points': time_points,
+                'freq_data': np.array(freq_data),
+                'level_data': np.array(level_data),
+                'pressure_data': np.array(pressure_data)
+            }
+        return None
+
+    def start_simulation(self, duration_minutes, update_interval):
+        """Start the real-time simulation"""
+        if self.simulation_running:
+            return "Simulation already running!"
         
-        # Create subplot for pressure readings
+        self.simulation_running = True
+        self.simulation_data = self.generate_simulation_data(duration_minutes, update_interval)
+        self.simulation_start_time = datetime.now()
+        self.current_time_index = 0
+        
+        # Start simulation thread
+        self.simulation_thread = threading.Thread(
+            target=self._simulation_loop,
+            args=(duration_minutes, update_interval)
+        )
+        self.simulation_thread.daemon = True
+        self.simulation_thread.start()
+        
+        return f"🚀 Simulation started! Running for {duration_minutes} minutes with {update_interval}s updates."
+
+    def stop_simulation(self):
+        """Stop the simulation"""
+        self.simulation_running = False
+        if self.simulation_thread:
+            self.simulation_thread.join(timeout=1)
+        return "⏹️ Simulation stopped."
+
+    def _simulation_loop(self, duration_minutes, update_interval):
+        """Main simulation loop"""
+        while self.simulation_running and self.current_time_index < len(self.simulation_data['time_points']):
+            time.sleep(update_interval)
+            self.current_time_index += 1
+
+    def get_simulation_status(self):
+        """Get current simulation status"""
+        if not self.simulation_running:
+            return "⏸️ Simulation not running"
+        
+        elapsed = datetime.now() - self.simulation_start_time
+        progress = (self.current_time_index / len(self.simulation_data['time_points'])) * 100 if self.simulation_data else 0
+        
+        return f"🔄 LIVE - Elapsed: {elapsed.strftime('%M:%S')} | Progress: {progress:.1f}% | Data Points: {self.current_time_index + 1}"
+
+    def create_real_time_pressure_dashboard(self):
+        """Create real-time pressure monitoring dashboard"""
+        if not self.simulation_running or self.simulation_data is None:
+            return self.create_pressure_dashboard()
+        
+        # Get current simulation data
+        current_data = self.simulation_data['pressure_data'][:self.current_time_index + 1]
+        time_points = self.simulation_data['time_points'][:self.current_time_index + 1]
+        
+        # Create subplot
         fig = make_subplots(
-            rows=2, cols=2,
-            subplot_titles=('Total Pressure Upstream', 'Total Pressure Downstream', 
-                          'Static Pressure Upstream', 'Static Pressure Downstream'),
-            specs=[[{"secondary_y": False}, {"secondary_y": False}],
-                   [{"secondary_y": False}, {"secondary_y": False}]]
+            rows=2, cols=1,
+            subplot_titles=('Total Pressure (Real-time)', 'Static Pressure (Real-time)'),
+            vertical_spacing=0.1
         )
         
-        # Add traces for each pressure type
+        # Total pressure
         fig.add_trace(
-            go.Scatter(x=self.pressure_data['Receipt_time'], 
-                      y=self.pressure_data['Total Pressure Upstream (psi)'],
-                      mode='lines+markers', name='Total Upstream', line=dict(color='blue')),
+            go.Scatter(
+                x=time_points,
+                y=current_data[:, 0],
+                name='Upstream',
+                line=dict(color='blue', width=2),
+                mode='lines+markers'
+            ),
             row=1, col=1
         )
         
         fig.add_trace(
-            go.Scatter(x=self.pressure_data['Receipt_time'], 
-                      y=self.pressure_data['Total Pressure Downstream (psi)'],
-                      mode='lines+markers', name='Total Downstream', line=dict(color='red')),
-            row=1, col=2
+            go.Scatter(
+                x=time_points,
+                y=current_data[:, 1],
+                name='Downstream',
+                line=dict(color='red', width=2),
+                mode='lines+markers'
+            ),
+            row=1, col=1
         )
         
+        # Static pressure
         fig.add_trace(
-            go.Scatter(x=self.pressure_data['Receipt_time'], 
-                      y=self.pressure_data['Static Pressure Upstream (psi)'],
-                      mode='lines+markers', name='Static Upstream', line=dict(color='green')),
+            go.Scatter(
+                x=time_points,
+                y=current_data[:, 2],
+                name='Static Downstream',
+                line=dict(color='green', width=2),
+                mode='lines+markers'
+            ),
             row=2, col=1
         )
         
         fig.add_trace(
-            go.Scatter(x=self.pressure_data['Receipt_time'], 
-                      y=self.pressure_data['Static Pressure Downstream (psi)'],
-                      mode='lines+markers', name='Static Downstream', line=dict(color='orange')),
-            row=2, col=2
+            go.Scatter(
+                x=time_points,
+                y=current_data[:, 3],
+                name='Static Upstream',
+                line=dict(color='orange', width=2),
+                mode='lines+markers'
+            ),
+            row=2, col=1
+        )
+        
+        # Update layout
+        fig.update_layout(
+            title=f'Real-time Pressure Monitoring - {self.current_time_index + 1} data points',
+            height=600,
+            showlegend=True,
+            xaxis_title='Time',
+            yaxis_title='Pressure (psi)'
+        )
+        
+        # Add real-time indicator
+        if self.simulation_running:
+            fig.add_annotation(
+                x=time_points[-1] if time_points else datetime.now(),
+                y=current_data[-1, 0] if len(current_data) > 0 else 0,
+                text="🔄 LIVE",
+                showarrow=True,
+                arrowhead=2,
+                arrowcolor="red",
+                arrowwidth=2,
+                arrowsize=1,
+                bgcolor="yellow",
+                bordercolor="red",
+                borderwidth=2
+            )
+        
+        return fig
+
+    def create_real_time_acoustic_spectrum(self, time_index=None):
+        """Create real-time acoustic spectrum visualization"""
+        if not self.simulation_running or self.simulation_data is None:
+            return self.create_acoustic_spectrum(0)
+        
+        if time_index is None:
+            time_index = self.current_time_index
+        
+        if time_index >= len(self.simulation_data['freq_data']):
+            time_index = len(self.simulation_data['freq_data']) - 1
+        
+        # Get frequency data for current time
+        freq_values = self.simulation_data['freq_data'][time_index]
+        freq_labels = self.freq_columns
+        
+        # Create spectrum plot
+        fig = go.Figure()
+        
+        fig.add_trace(go.Scatter(
+            x=freq_labels,
+            y=freq_values,
+            mode='lines+markers',
+            name=f'Time: {self.simulation_data["time_points"][time_index].strftime("%H:%M:%S")}',
+            line=dict(color='purple', width=3),
+            marker=dict(size=8, color='purple')
+        ))
+        
+        # Update layout
+        fig.update_layout(
+            title=f'Real-time Acoustic Spectrum - {self.simulation_data["time_points"][time_index].strftime("%H:%M:%S")}',
+            xaxis_title='Frequency (Hz)',
+            yaxis_title='Amplitude (dB)',
+            height=500,
+            showlegend=True
+        )
+        
+        # Set x-axis to log scale
+        fig.update_xaxes(type='log')
+        
+        return fig
+
+    def create_real_time_acoustic_heatmap(self, num_samples=None):
+        """Create real-time acoustic heatmap"""
+        if not self.simulation_running or self.simulation_data is None:
+            return self.create_acoustic_heatmap(50)
+        
+        if num_samples is None:
+            num_samples = min(self.current_time_index + 1, 100)
+        
+        # Get recent frequency data
+        recent_freq_data = self.simulation_data['freq_data'][:num_samples]
+        time_labels = [t.strftime("%H:%M:%S") for t in self.simulation_data['time_points'][:num_samples]]
+        
+        # Create heatmap
+        fig = go.Figure(data=go.Heatmap(
+            z=recent_freq_data.T,
+            x=time_labels,
+            y=self.freq_columns,
+            colorscale='Viridis',
+            colorbar=dict(title='Amplitude (dB)')
+        ))
+        
+        fig.update_layout(
+            title=f'Real-time Acoustic Frequency Response - Last {num_samples} samples',
+            xaxis_title='Time',
+            yaxis_title='Frequency (Hz)',
+            height=600
+        )
+        
+        return fig
+
+    def create_real_time_level_analysis(self):
+        """Create real-time level monitoring"""
+        if not self.simulation_running or self.simulation_data is None:
+            return self.create_level_analysis()
+        
+        # Get current level data
+        current_data = self.simulation_data['level_data'][:self.current_time_index + 1]
+        time_points = self.simulation_data['time_points'][:self.current_time_index + 1]
+        
+        # Create subplot
+        fig = make_subplots(
+            rows=2, cols=1,
+            subplot_titles=('Level Contact (Real-time)', 'Level Ambient (Real-time)'),
+            vertical_spacing=0.1
+        )
+        
+        # Level contact
+        fig.add_trace(
+            go.Scatter(
+                x=time_points,
+                y=current_data[:, 0],
+                name='Level Contact',
+                line=dict(color='blue', width=2),
+                mode='lines+markers',
+                fill='tonexty'
+            ),
+            row=1, col=1
+        )
+        
+        # Level ambient
+        fig.add_trace(
+            go.Scatter(
+                x=time_points,
+                y=current_data[:, 1],
+                name='Level Ambient',
+                line=dict(color='green', width=2),
+                mode='lines+markers',
+                fill='tonexty'
+            ),
+            row=2, col=1
+        )
+        
+        # Update layout
+        fig.update_layout(
+            title=f'Real-time Level Monitoring - {self.current_time_index + 1} data points',
+            height=600,
+            showlegend=True,
+            xaxis_title='Time',
+            yaxis_title='Level'
+        )
+        
+        return fig
+
+    def create_pressure_dashboard(self):
+        """Create pressure monitoring dashboard"""
+        if self.pressure_data is None:
+            return go.Figure()
+        
+        fig = make_subplots(
+            rows=2, cols=1,
+            subplot_titles=('Total Pressure', 'Static Pressure'),
+            vertical_spacing=0.1
+        )
+        
+        # Total pressure
+        fig.add_trace(
+            go.Scatter(
+                x=self.pressure_data['Receipt_time'],
+                y=self.pressure_data['Total Pressure Upstream (psi)'],
+                name='Upstream',
+                mode='lines+markers'
+            ),
+            row=1, col=1
+        )
+        
+        fig.add_trace(
+            go.Scatter(
+                x=self.pressure_data['Receipt_time'],
+                y=self.pressure_data['Total Pressure Downstream (psi)'],
+                name='Downstream',
+                mode='lines+markers'
+            ),
+            row=1, col=1
+        )
+        
+        # Static pressure
+        fig.add_trace(
+            go.Scatter(
+                x=self.pressure_data['Receipt_time'],
+                y=self.pressure_data['Static Pressure Downstream (psi)'],
+                name='Static Downstream',
+                mode='lines+markers'
+            ),
+            row=2, col=1
+        )
+        
+        fig.add_trace(
+            go.Scatter(
+                x=self.pressure_data['Receipt_time'],
+                y=self.pressure_data['Static Pressure Upstream (psi)'],
+                name='Static Upstream',
+                mode='lines+markers'
+            ),
+            row=2, col=1
         )
         
         fig.update_layout(
-            title="Pressure Sensor Readings Over Time",
+            title='Pressure Sensor Monitoring',
             height=600,
             showlegend=True
         )
         
         return fig
-    
-    def create_acoustic_spectrum(self, time_index=0):
-        """Create acoustic frequency spectrum visualization"""
-        if self.acoustic_data is None:
-            return "No acoustic data available"
+
+    def create_acoustic_spectrum(self, time_index):
+        """Create acoustic spectrum visualization"""
+        if self.acoustic_data is None or time_index >= len(self.acoustic_data):
+            return go.Figure()
         
-        # Get data for specific time index
-        if time_index >= len(self.acoustic_data):
-            time_index = 0
+        freq_values = self.acoustic_data[self.freq_columns].iloc[time_index].values
         
-        row_data = self.acoustic_data.iloc[time_index]
-        timestamp = row_data['receipt_time']
-        
-        # Extract frequency values
-        frequencies = []
-        values = []
-        
-        for col in self.freq_columns:
-            try:
-                freq = float(col.replace('f', ''))
-                val = float(row_data[col])
-                frequencies.append(freq)
-                values.append(val)
-            except:
-                continue
-        
-        # Sort by frequency
-        sorted_data = sorted(zip(frequencies, values))
-        frequencies, values = zip(*sorted_data)
-        
-        # Create spectrum plot
         fig = go.Figure()
         fig.add_trace(go.Scatter(
-            x=frequencies,
-            y=values,
+            x=self.freq_columns,
+            y=freq_values,
             mode='lines+markers',
-            name='Frequency Response',
-            line=dict(color='purple', width=2),
-            marker=dict(size=6)
+            name=f'Time: {self.acoustic_data["receipt_time"].iloc[time_index].strftime("%H:%M:%S")}'
         ))
         
         fig.update_layout(
-            title=f"Acoustic Frequency Spectrum - {timestamp}",
-            xaxis_title="Frequency (Hz)",
-            yaxis_title="Amplitude (dB)",
-            xaxis_type="log",
-            height=500,
-            showlegend=True
+            title='Acoustic Frequency Spectrum',
+            xaxis_title='Frequency (Hz)',
+            yaxis_title='Amplitude (dB)',
+            height=500
         )
         
+        fig.update_xaxes(type='log')
+        
         return fig
-    
-    def create_acoustic_heatmap(self, num_samples=100):
-        """Create acoustic data heatmap"""
+
+    def create_acoustic_heatmap(self, num_samples):
+        """Create acoustic heatmap visualization"""
         if self.acoustic_data is None:
-            return "No acoustic data available"
+            return go.Figure()
         
-        # Sample data for heatmap
+        # Use the specified number of samples
         sample_data = self.acoustic_data.head(num_samples)
+        freq_data = sample_data[self.freq_columns].values.T
         
-        # Prepare data for heatmap
-        heatmap_data = []
-        freq_labels = []
+        time_labels = [t.strftime("%H:%M:%S") for t in sample_data['receipt_time']]
         
-        for col in self.freq_columns:
-            try:
-                freq = float(col.replace('f', ''))
-                freq_labels.append(f"{freq}Hz")
-                values = sample_data[col].values
-                heatmap_data.append(values)
-            except:
-                continue
-        
-        # Create heatmap
         fig = go.Figure(data=go.Heatmap(
-            z=heatmap_data,
-            x=sample_data['receipt_time'].dt.strftime('%H:%M:%S'),
-            y=freq_labels,
+            z=freq_data,
+            x=time_labels,
+            y=self.freq_columns,
             colorscale='Viridis',
-            colorbar=dict(title="Amplitude (dB)")
+            colorbar=dict(title='Amplitude (dB)')
         ))
         
         fig.update_layout(
-            title="Acoustic Frequency Response Heatmap Over Time",
-            xaxis_title="Time",
-            yaxis_title="Frequency",
+            title=f'Acoustic Frequency Response Over Time ({num_samples} samples)',
+            xaxis_title='Time',
+            yaxis_title='Frequency (Hz)',
             height=600
         )
         
         return fig
-    
+
     def create_level_analysis(self):
-        """Create level contact and ambient analysis"""
+        """Create level monitoring visualization"""
         if self.acoustic_data is None:
-            return "No acoustic data available"
+            return go.Figure()
         
-        # Create subplot for level readings
         fig = make_subplots(
-            rows=1, cols=2,
-            subplot_titles=('Level Contact Over Time', 'Level Ambient Over Time')
+            rows=2, cols=1,
+            subplot_titles=('Level Contact', 'Level Ambient'),
+            vertical_spacing=0.1
         )
         
         fig.add_trace(
-            go.Scatter(x=self.acoustic_data['receipt_time'], 
-                      y=self.acoustic_data['level_contact'],
-                      mode='lines+markers', name='Level Contact', line=dict(color='red')),
+            go.Scatter(
+                x=self.acoustic_data['receipt_time'],
+                y=self.acoustic_data['level_contact'],
+                name='Level Contact',
+                mode='lines+markers'
+            ),
             row=1, col=1
         )
         
         fig.add_trace(
-            go.Scatter(x=self.acoustic_data['receipt_time'], 
-                      y=self.acoustic_data['level_ambient'],
-                      mode='lines+markers', name='Level Ambient', line=dict(color='blue')),
-            row=1, col=2
+            go.Scatter(
+                x=self.acoustic_data['receipt_time'],
+                y=self.acoustic_data['level_ambient'],
+                name='Level Ambient',
+                mode='lines+markers'
+            ),
+            row=2, col=1
         )
         
         fig.update_layout(
-            title="Level Sensor Readings Over Time",
-            height=500,
+            title='Level Sensor Monitoring',
+            height=600,
             showlegend=True
         )
         
         return fig
-    
+
     def create_statistics_panel(self):
         """Create statistics summary panel"""
         if self.acoustic_data is None or self.pressure_data is None:
-            return "No data available for statistics"
+            return "Data not available"
         
         # Calculate statistics
-        stats_html = """
-        <div style="font-family: Arial, sans-serif; padding: 20px;">
-            <h2>Sensor Data Statistics</h2>
-            
-            <h3>Acoustic Sensor (AC01-1400057)</h3>
-            <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
-                <tr style="background-color: #f2f2f2;">
-                    <th style="border: 1px solid #ddd; padding: 8px;">Metric</th>
-                    <th style="border: 1px solid #ddd; padding: 8px;">Value</th>
-                </tr>
-                <tr>
-                    <td style="border: 1px solid #ddd; padding: 8px;">Total Records</td>
-                    <td style="border: 1px solid #ddd; padding: 8px;">{}</td>
-                </tr>
-                <tr>
-                    <td style="border: 1px solid #ddd; padding: 8px;">Frequency Bands</td>
-                    <td style="border: 1px solid #ddd; padding: 8px;">{}</td>
-                </tr>
-                <tr>
-                    <td style="border: 1px solid #ddd; padding: 8px;">Time Range</td>
-                    <td style="border: 1px solid #ddd; padding: 8px;">{} to {}</td>
-                </tr>
-                <tr>
-                    <td style="border: 1px solid #ddd; padding: 8px;">Level Contact Range</td>
-                    <td style="border: 1px solid #ddd; padding: 8px;">{:.2f} to {:.2f}</td>
-                </tr>
-                <tr>
-                    <td style="border: 1px solid #ddd; padding: 8px;">Level Ambient Range</td>
-                    <td style="border: 1px solid #ddd; padding: 8px;">{:.2f} to {:.2f}</td>
-                </tr>
-            </table>
-            
-            <h3>Pressure Sensors</h3>
-            <table style="width: 100%; border-collapse: collapse;">
-                <tr style="background-color: #f2f2f2;">
-                    <th style="border: 1px solid #ddd; padding: 8px;">Sensor Type</th>
-                    <th style="border: 1px solid #ddd; padding: 8px;">Min (psi)</th>
-                    <th style="border: 1px solid #ddd; padding: 8px;">Max (psi)</th>
-                    <th style="border: 1px solid #ddd; padding: 8px;">Mean (psi)</th>
-                </tr>
-                <tr>
-                    <td style="border: 1px solid #ddd; padding: 8px;">Total Upstream</td>
-                    <td style="border: 1px solid #ddd; padding: 8px;">{:.3f}</td>
-                    <td style="border: 1px solid #ddd; padding: 8px;">{:.3f}</td>
-                    <td style="border: 1px solid #ddd; padding: 8px;">{:.3f}</td>
-                </tr>
-                <tr>
-                    <td style="border: 1px solid #ddd; padding: 8px;">Total Downstream</td>
-                    <td style="border: 1px solid #ddd; padding: 8px;">{:.3f}</td>
-                    <td style="border: 1px solid #ddd; padding: 8px;">{:.3f}</td>
-                    <td style="border: 1px solid #ddd; padding: 8px;">{:.3f}</td>
-                </tr>
-                <tr>
-                    <td style="border: 1px solid #ddd; padding: 8px;">Static Upstream</td>
-                    <td style="border: 1px solid #ddd; padding: 8px;">{:.3f}</td>
-                    <td style="border: 1px solid #ddd; padding: 8px;">{:.3f}</td>
-                    <td style="border: 1px solid #ddd; padding: 8px;">{:.3f}</td>
-                </tr>
-                <tr>
-                    <td style="border: 1px solid #ddd; padding: 8px;">Static Downstream</td>
-                    <td style="border: 1px solid #ddd; padding: 8px;">{:.3f}</td>
-                    <td style="border: 1px solid #ddd; padding: 8px;">{:.3f}</td>
-                    <td style="border: 1px solid #ddd; padding: 8px;">{:.3f}</td>
-                </tr>
-            </table>
-        </div>
-        """.format(
-            len(self.acoustic_data),
-            len(self.freq_columns),
-            self.acoustic_data['receipt_time'].min(),
-            self.acoustic_data['receipt_time'].max(),
-            self.acoustic_data['level_contact'].min(),
-            self.acoustic_data['level_contact'].max(),
-            self.acoustic_data['level_ambient'].min(),
-            self.acoustic_data['level_ambient'].max(),
-            self.pressure_data['Total Pressure Upstream (psi)'].min(),
-            self.pressure_data['Total Pressure Upstream (psi)'].max(),
-            self.pressure_data['Total Pressure Upstream (psi)'].mean(),
-            self.pressure_data['Total Pressure Downstream (psi)'].min(),
-            self.pressure_data['Total Pressure Downstream (psi)'].max(),
-            self.pressure_data['Total Pressure Downstream (psi)'].mean(),
-            self.pressure_data['Static Pressure Upstream (psi)'].min(),
-            self.pressure_data['Static Pressure Upstream (psi)'].max(),
-            self.pressure_data['Static Pressure Upstream (psi)'].mean(),
-            self.pressure_data['Static Pressure Downstream (psi)'].min(),
-            self.pressure_data['Static Pressure Downstream (psi)'].max(),
-            self.pressure_data['Static Pressure Downstream (psi)'].mean()
-        )
+        acoustic_stats = {
+            'Total Records': len(self.acoustic_data),
+            'Frequency Bands': len(self.freq_columns),
+            'Frequency Range': f"{self.freq_columns[0]} - {self.freq_columns[-1]}",
+            'Level Contact Range': f"{self.acoustic_data['level_contact'].min():.1f} - {self.acoustic_data['level_contact'].max():.1f}",
+            'Level Ambient Range': f"{self.acoustic_data['level_ambient'].min():.1f} - {self.acoustic_data['level_ambient'].max():.1f}"
+        }
         
-        return stats_html
+        pressure_stats = {
+            'Total Records': len(self.pressure_data),
+            'Pressure Range': f"{self.pressure_data['Total Pressure Upstream (psi)'].min():.3f} - {self.pressure_data['Total Pressure Upstream (psi)'].max():.3f} psi",
+            'Data Period': f"{self.pressure_data['Receipt_time'].min().strftime('%Y-%m-%d %H:%M')} to {self.pressure_data['Receipt_time'].max().strftime('%Y-%m-%d %H:%M')}"
+        }
+        
+        # Create HTML summary
+        html_content = f"""
+        <div style="font-family: Arial, sans-serif; padding: 20px;">
+            <h2 style="color: #2E86AB;">📊 Sensor Data Statistics</h2>
+            
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 20px;">
+                <div style="background: #f8f9fa; padding: 15px; border-radius: 8px; border-left: 4px solid #2E86AB;">
+                    <h3 style="color: #2E86AB; margin-top: 0;">🎵 Acoustic Sensor (AC01-1400057)</h3>
+                    <ul style="list-style: none; padding: 0;">
+                        <li>📈 <strong>Total Records:</strong> {acoustic_stats['Total Records']:,}</li>
+                        <li>🎚️ <strong>Frequency Bands:</strong> {acoustic_stats['Frequency Bands']}</li>
+                        <li>🔊 <strong>Frequency Range:</strong> {acoustic_stats['Frequency Range']}</li>
+                        <li>📏 <strong>Level Contact:</strong> {acoustic_stats['Level Contact Range']}</li>
+                        <li>🌡️ <strong>Level Ambient:</strong> {acoustic_stats['Level Ambient Range']}</li>
+                    </ul>
+                </div>
+                
+                <div style="background: #f8f9fa; padding: 15px; border-radius: 8px; border-left: 4px solid #28a745;">
+                    <h3 style="color: #28a745; margin-top: 0;">📊 Pressure Sensors</h3>
+                    <ul style="list-style: none; padding: 0;">
+                        <li>📈 <strong>Total Records:</strong> {pressure_stats['Total Records']:,}</li>
+                        <li>⚡ <strong>Pressure Range:</strong> {pressure_stats['Pressure Range']}</li>
+                        <li>🕒 <strong>Data Period:</strong> {pressure_stats['Data Period']}</li>
+                        <li>🎯 <strong>Accuracy:</strong> ±0.1% Full Scale</li>
+                        <li>⚡ <strong>Response Time:</strong> <10ms</li>
+                    </ul>
+                </div>
+            </div>
+            
+            <div style="margin-top: 20px; padding: 15px; background: #e3f2fd; border-radius: 8px; border-left: 4px solid #2196f3;">
+                <h3 style="color: #2196f3; margin-top: 0;">🚀 Real-time Simulation</h3>
+                <p style="margin: 0; color: #1976d2;">
+                    The dashboard now includes real-time time series simulation capabilities, 
+                    allowing you to demonstrate live sensor data visualization and monitoring.
+                </p>
+            </div>
+        </div>
+        """
+        
+        return html_content
 
 def create_dashboard():
-    """Create the main Gradio dashboard"""
+    """Create the Gradio dashboard interface"""
     dashboard = AcousticSensorDashboard()
     
-    with gr.Blocks(title="Acoustic Sensor POC Dashboard", theme=gr.themes.Soft()) as demo:
+    with gr.Blocks(
+        title="🎵 Acoustic Sensor POC Dashboard - Real-time Simulation",
+        theme=gr.themes.Soft(),
+        css="""
+        .gradio-container {
+            max-width: 1400px !important;
+        }
+        .status-box {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 15px;
+            border-radius: 10px;
+            margin: 10px 0;
+            text-align: center;
+            font-weight: bold;
+        }
+        """
+    ) as demo:
         gr.Markdown("""
         # 🎵 Acoustic Sensor POC Dashboard
+        ## Revolutionary Acoustic Sensing Technology with Real-time Simulation
         
-        **Revolutionary Acoustic Sensing Technology** - Demonstrating advanced frequency analysis and pressure monitoring capabilities.
-        
-        This dashboard showcases the innovative acoustic sensor technology with real-time data visualization and analysis.
+        This dashboard showcases cutting-edge acoustic sensor capabilities through interactive visualizations and live time series simulation.
         """)
         
-        with gr.Tabs():
-            # Overview Tab
-            with gr.Tab("📊 Overview"):
-                gr.Markdown("""
-                ## Sensor System Overview
-                
-                This POC demonstrates cutting-edge acoustic sensor technology capable of:
-                - **Wide Frequency Range**: 25Hz to 10kHz spectrum analysis
-                - **High Precision**: Sub-second temporal resolution
-                - **Multi-Parameter Sensing**: Pressure, acoustic, and level measurements
-                - **Real-time Monitoring**: Continuous data acquisition and analysis
-                """)
+        # Simulation Control Panel
+        with gr.Row():
+            with gr.Column(scale=2):
+                gr.Markdown("### 🚀 Real-time Simulation Controls")
+                with gr.Row():
+                    duration_slider = gr.Slider(
+                        minimum=1, maximum=30, value=10, step=1,
+                        label="Simulation Duration (minutes)"
+                    )
+                    interval_slider = gr.Slider(
+                        minimum=0.5, maximum=5, value=1, step=0.5,
+                        label="Update Interval (seconds)"
+                    )
                 
                 with gr.Row():
-                    with gr.Column(scale=2):
-                        overview_plot = gr.Plot(label="Pressure Sensor Overview")
-                    with gr.Column(scale=1):
-                        overview_stats = gr.HTML(label="System Statistics")
+                    start_btn = gr.Button("🚀 Start Simulation", variant="primary")
+                    stop_btn = gr.Button("⏹️ Stop Simulation", variant="stop")
+                    refresh_btn = gr.Button("🔄 Refresh All", variant="secondary")
                 
-                gr.Button("Refresh Overview", variant="primary").click(
-                    lambda: (dashboard.create_pressure_dashboard(), dashboard.create_statistics_panel()),
-                    outputs=[overview_plot, overview_stats]
+                status_display = gr.HTML(
+                    value="⏸️ Simulation not running",
+                    elem_classes=["status-box"]
+                )
+            
+            with gr.Column(scale=1):
+                gr.Markdown("### 📊 Live Status")
+                live_status = gr.HTML(
+                    value="Ready to start simulation...",
+                    elem_classes=["status-box"]
+                )
+        
+        # Main Dashboard Tabs
+        with gr.Tabs():
+            # Overview Tab
+            with gr.Tab("📊 Overview - Real-time"):
+                gr.Markdown("### 🔄 Live Pressure Monitoring")
+                pressure_plot = gr.Plot(
+                    value=dashboard.create_pressure_dashboard(),
+                    label="Pressure Dashboard"
+                )
+                
+                gr.Markdown("### 📈 System Statistics")
+                stats_panel = gr.HTML(
+                    value=dashboard.create_statistics_panel(),
+                    label="Statistics"
                 )
             
             # Acoustic Analysis Tab
-            with gr.Tab("🎵 Acoustic Analysis"):
-                gr.Markdown("""
-                ## Frequency Spectrum Analysis
-                
-                Explore the acoustic frequency response across different time intervals.
-                """)
-                
+            with gr.Tab("🎵 Acoustic Analysis - Real-time"):
+                gr.Markdown("### 🎵 Live Frequency Spectrum")
                 with gr.Row():
-                    with gr.Column(scale=1):
-                        time_slider = gr.Slider(
-                            minimum=0, 
-                            maximum=min(999, len(dashboard.acoustic_data)-1) if dashboard.acoustic_data is not None else 999,
-                            value=0,
-                            step=1,
-                            label="Time Index"
-                        )
-                        heatmap_samples = gr.Slider(
-                            minimum=50,
-                            maximum=500,
-                            value=100,
-                            step=50,
-                            label="Heatmap Samples"
-                        )
-                    
-                    with gr.Column(scale=2):
-                        spectrum_plot = gr.Plot(label="Frequency Spectrum")
+                    time_slider = gr.Slider(
+                        minimum=0, maximum=999, value=0, step=1,
+                        label="Time Index (for historical data)"
+                    )
+                    sample_slider = gr.Slider(
+                        minimum=50, maximum=500, value=100, step=50,
+                        label="Heatmap Samples"
+                    )
                 
-                with gr.Row():
-                    heatmap_plot = gr.Plot(label="Frequency Response Heatmap")
-                
-                # Update plots based on slider changes
-                time_slider.change(
-                    dashboard.create_acoustic_spectrum,
-                    inputs=[time_slider],
-                    outputs=[spectrum_plot]
+                spectrum_plot = gr.Plot(
+                    value=dashboard.create_acoustic_spectrum(0),
+                    label="Acoustic Spectrum"
                 )
                 
-                heatmap_samples.change(
-                    dashboard.create_acoustic_heatmap,
-                    inputs=[heatmap_samples],
-                    outputs=[heatmap_plot]
+                gr.Markdown("### 🔥 Live Frequency Heatmap")
+                heatmap_plot = gr.Plot(
+                    value=dashboard.create_acoustic_heatmap(100),
+                    label="Acoustic Heatmap"
                 )
             
             # Level Monitoring Tab
-            with gr.Tab("📏 Level Monitoring"):
-                gr.Markdown("""
-                ## Level Sensor Monitoring
-                
-                Real-time monitoring of level contact and ambient conditions.
-                """)
-                
-                level_plot = gr.Plot(label="Level Sensor Readings")
-                gr.Button("Refresh Level Data", variant="primary").click(
-                    dashboard.create_level_analysis,
-                    outputs=[level_plot]
+            with gr.Tab("📏 Level Monitoring - Real-time"):
+                gr.Markdown("### 📏 Live Level Monitoring")
+                level_plot = gr.Plot(
+                    value=dashboard.create_level_analysis(),
+                    label="Level Analysis"
                 )
             
             # Technical Details Tab
             with gr.Tab("🔧 Technical Details"):
+                gr.Markdown("### 📋 Sensor Specifications")
                 gr.Markdown("""
-                ## Technical Specifications
+                ## 🎵 Acoustic Sensor (AC01-1400057)
                 
-                ### Acoustic Sensor (AC01-1400057)
-                - **Frequency Range**: 25Hz - 10kHz
-                - **Sampling Rate**: 1Hz
-                - **Resolution**: 32-bit precision
-                - **Dynamic Range**: 120dB
+                **Frequency Range**: 25Hz to 10kHz (27 discrete bands)  
+                **Dynamic Range**: 120dB  
+                **Resolution**: 32-bit  
+                **Temporal Resolution**: 1 second  
+                **Applications**: Industrial monitoring, research, quality control
                 
-                ### Pressure Sensors
-                - **Range**: 0-50,000 psi
-                - **Accuracy**: ±0.1% FS
-                - **Response Time**: <10ms
+                ## 📊 Pressure Sensors
                 
-                ### Data Format
-                - **Timestamp**: ISO 8601 format
-                - **Frequency Bands**: 31 discrete bands
-                - **Additional Parameters**: Level contact, ambient conditions
+                **Measurement Range**: 0-50,000 PSI  
+                **Accuracy**: ±0.1% Full Scale  
+                **Response Time**: <10ms  
+                **Applications**: Pipeline monitoring, process control, safety systems
+                
+                ## 🚀 Real-time Simulation Features
+                
+                **Live Data Generation**: Realistic sensor data patterns  
+                **Time Series Animation**: Continuous data flow visualization  
+                **Interactive Controls**: Adjustable simulation parameters  
+                **Performance Monitoring**: Real-time status and progress tracking  
+                **Multi-sensor Integration**: Coordinated data visualization
                 """)
-                
-                tech_stats = gr.HTML(label="Detailed Statistics")
-                gr.Button("Generate Technical Report", variant="primary").click(
-                    dashboard.create_statistics_panel,
-                    outputs=[tech_stats]
-                )
         
-        # Initialize plots
-        demo.load(
-            lambda: (
-                dashboard.create_pressure_dashboard(),
-                dashboard.create_statistics_panel(),
-                dashboard.create_acoustic_spectrum(0),
-                dashboard.create_acoustic_heatmap(100),
-                dashboard.create_level_analysis()
-            ),
-            outputs=[
-                overview_plot, overview_stats, 
-                spectrum_plot, heatmap_plot, level_plot
-            ]
+        # Event handlers
+        def start_sim(duration, interval):
+            result = dashboard.start_simulation(duration, interval)
+            return result, dashboard.get_simulation_status()
+        
+        def stop_sim():
+            result = dashboard.stop_simulation()
+            return result, "⏸️ Simulation stopped"
+        
+        def refresh_all():
+            return (
+                dashboard.create_real_time_pressure_dashboard(),
+                dashboard.create_real_time_acoustic_spectrum(),
+                dashboard.create_real_time_acoustic_heatmap(),
+                dashboard.create_real_time_level_analysis(),
+                dashboard.get_simulation_status()
+            )
+        
+        def update_live_status():
+            return dashboard.get_simulation_status()
+        
+        # Connect event handlers
+        start_btn.click(
+            start_sim,
+            inputs=[duration_slider, interval_slider],
+            outputs=[status_display, live_status]
+        )
+        
+        stop_btn.click(
+            stop_sim,
+            outputs=[status_display, live_status]
+        )
+        
+        refresh_btn.click(
+            refresh_all,
+            outputs=[pressure_plot, spectrum_plot, heatmap_plot, level_plot, live_status]
+        )
+        
+        # Auto-refresh for live status
+        demo.load(update_live_status, outputs=[live_status])
+        
+        # Update plots based on simulation state
+        time_slider.change(
+            lambda x: dashboard.create_real_time_acoustic_spectrum(x) if dashboard.simulation_running else dashboard.create_acoustic_spectrum(x),
+            inputs=[time_slider],
+            outputs=[spectrum_plot]
+        )
+        
+        sample_slider.change(
+            lambda x: dashboard.create_real_time_acoustic_heatmap(x) if dashboard.simulation_running else dashboard.create_acoustic_heatmap(x),
+            inputs=[sample_slider],
+            outputs=[heatmap_plot]
         )
     
     return demo
 
 if __name__ == "__main__":
     demo = create_dashboard()
-    demo.launch(share=False, server_name="0.0.0.0", server_port=7860) 
+    demo.launch(
+        server_name="0.0.0.0",
+        server_port=7860,
+        share=False,
+        show_error=True
+    ) 
